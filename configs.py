@@ -16,10 +16,10 @@ DWCONV3D_DISABLE_CUDNN = True
 # these examples.
 DATASETS = {
     'ssv2': dict(
-        TRAIN_ROOT='',
-        VAL_ROOT='',
-        TRAIN_LIST='',
-        VAL_LIST='',
+        TRAIN_ROOT='/scratch/shared/beegfs/piyush/datasets/SSv2/20bn-something-something-v2',
+        VAL_ROOT='/scratch/shared/beegfs/piyush/datasets/SSv2/20bn-something-something-v2',
+        TRAIN_LIST='/scratch/shared/beegfs/piyush/datasets/SSv2/splits/STAdapter/ssv2_train.txt',
+        VAL_LIST='/scratch/shared/beegfs/piyush/datasets/SSv2/splits/STAdapter/ssv2_val.txt',
         NUM_CLASSES=174,
     ),
     'k400': dict(

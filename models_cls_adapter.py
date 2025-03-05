@@ -277,7 +277,7 @@ class VisionTransformer(nn.Module):
         return x
 
 
-def clip_vit_base_patch16_adapter24x384(**kwargs):
+def clip_vit_base_patch16_cls_adapter24x384(**kwargs):
     model = VisionTransformer(
         input_resolution=224,
         patch_size=16,
@@ -297,7 +297,7 @@ def clip_vit_base_patch16_adapter24x384(**kwargs):
     print(model.load_state_dict(checkpoint.visual.state_dict(), strict=False))
     return model
 
-def clip_vit_base_patch16_adapter12x384(**kwargs):
+def clip_vit_base_patch16_cls_adapter12x384(**kwargs):
     model = VisionTransformer(
         input_resolution=224,
         patch_size=16,
@@ -319,7 +319,7 @@ def clip_vit_base_patch16_adapter12x384(**kwargs):
 
 
 if __name__ == "__main__":
-    backbone = clip_vit_base_patch16_adapter12x384(num_classes=0)
+    backbone = clip_vit_base_patch16_cls_adapter12x384(num_classes=0)
     su.misc.num_params(backbone)
     su.misc.num_trainable_params(backbone)
 

@@ -8,7 +8,9 @@ import torch.nn.functional as F
 import torch.distributed as dist
 
 from utils import setup_for_distributed, MetricLogger, SmoothedValue, load_model, save_model
-import models_adapter
+# import models_adapter
+from models_adapter import *
+from models_cls_adapter import *
 from video_dataset import VideoDataset
 from configs import DATASETS
 
@@ -89,7 +91,8 @@ def main():
   print("{}".format(args).replace(', ', ',\n'))
 
   print('creating model')
-  model = models_adapter.__dict__[args.model](num_classes=DATASETS[args.dataset]['NUM_CLASSES']).cuda().train()
+  # model = models_adapter.__dict__[args.model](num_classes=DATASETS[args.dataset]['NUM_CLASSES']).cuda().train()
+  model = eval(args.model)(num_classes=DATASETS[args.dataset]['NUM_CLASSES']).cuda().train()
   n_trainable_params = 0
   for n, p in model.named_parameters():
     if p.requires_grad:
@@ -169,7 +172,8 @@ def main():
         ],
         )
     print(optimizer)
-    loss_scaler = torch.cuda.amp.GradScaler()
+    # loss_scaler = torch.cuda.amp.GradScaler()
+    loss_scaler = torch.amp.GradScaler('cuda')
     
     def lr_func(step):
       epoch = step / len(dataloader_train)
