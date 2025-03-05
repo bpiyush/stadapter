@@ -1,3 +1,4 @@
+"""Adapt image models to video data by only adapting CLS tokens."""
 # modified from: https://github.com/openai/CLIP/blob/a9b1bf5920416aaeaec965c25dd9e8f98c864f16/clip/model.py
 
 from typing import Tuple
@@ -8,6 +9,7 @@ import functools
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import einops
 
 from configs import (
     CLIP_VIT_B16_PATH,
@@ -17,53 +19,79 @@ from configs import (
 
 class Adapter(nn.Module):
 
-    def __init__(self, in_channels, adapter_channels, kernel_size):
+    def __init__(self, in_channels, adapter_channels):
         super().__init__()
+
+        # [(BT) (1 + HW) D] -> [(BT) (1 + HW) R]
         self.fc1 = nn.Linear(in_channels, adapter_channels)
-        self.conv = nn.Conv3d(
-            adapter_channels, adapter_channels,
-            kernel_size=kernel_size,
-            stride=(1, 1, 1),
-            padding=tuple(x // 2 for x in kernel_size),
-            groups=adapter_channels,
+
+        # [B T R] -> [B T R]
+        # A Transformer to model the interactions between the 
+        # CLS tokens of different frames
+        transformer_encoder_layer = nn.TransformerEncoderLayer(
+            d_model=adapter_channels,
+            nhead=4,
+            dim_feedforward=4 * adapter_channels,
+            # dim_feedforward=adapter_channels,
+            activation=nn.GELU(),
+            batch_first=True,
         )
+        self.transformer = nn.TransformerEncoder(
+            encoder_layer=transformer_encoder_layer,
+            num_layers=1,
+        )
+
         self.fc2 = nn.Linear(adapter_channels, in_channels)
-        nn.init.constant_(self.conv.weight, 0.)
-        nn.init.constant_(self.conv.bias, 0.)
+
+        # Initialize the weights of Transformer such that the output
+        # is close to zero: set all weights of the FFN to zero
+        nn.init.constant_(self.fc1.weight, 0.)
         nn.init.constant_(self.fc1.bias, 0.)
+        nn.init.constant_(self.fc2.weight, 0.)
         nn.init.constant_(self.fc2.bias, 0.)
+        nn.init.constant_(self.transformer.layers[0].self_attn.out_proj.weight, 0.)
+        nn.init.constant_(self.transformer.layers[0].self_attn.out_proj.bias, 0.)
+        nn.init.constant_(self.transformer.layers[0].linear1.weight, 0.)
+        nn.init.constant_(self.transformer.layers[0].linear1.bias, 0.)
+        nn.init.constant_(self.transformer.layers[0].linear2.weight, 0.)
+        nn.init.constant_(self.transformer.layers[0].linear2.bias, 0.)
+
 
     def forward(self, x, T):
         BT, L, C = x.size()
         B = BT // T
-        Ca = self.conv.in_channels
-        H = W = round(math.sqrt(L - 1))
-        assert L - 1 == H * W
         x_id = x
-        x = x[:, 1:, :]
+
+        # Only pick the CLS token: (BT) (1 + HW) D -> (BT) D -> B T D
+        x = x[:, 0, :]
+        x = einops.rearrange(x, "(B T) D -> B T D", B=B)
+
+        # Down projection: B T D -> B T R
         x = self.fc1(x)
-        x = x.view(B, T, H, W, Ca).permute(0, 4, 1, 2, 3).contiguous()
 
-        cudnn_enabled = torch.backends.cudnn.enabled
-        torch.backends.cudnn.enabled = cudnn_enabled and DWCONV3D_DISABLE_CUDNN
-        x = self.conv(x)
-        torch.backends.cudnn.enabled = cudnn_enabled
+        # Transformer: B T R -> B T R
+        x = self.transformer(x)
 
-        x = x.permute(0, 2, 3, 4, 1).contiguous().view(BT, L - 1, Ca)
+        # Up projection: B T R -> B T D
         x = self.fc2(x)
-        x_id[:, 1:, :] += x
+
+        # Reshape: B T D -> (BT) D
+        x = einops.rearrange(x, "B T D -> (B T) D", B=B)
+
+        # Residual connection
+        x_id[:, 0, :] += x
         return x_id
 
 
 if __name__ == "__main__":
     import shared.utils as su
 
-    adapter = Adapter(768, 128, (3, 3, 3))
+    adapter = Adapter(768, 128)
     su.misc.num_params(adapter)
 
-    x = torch.randn(32, 197, 768)
+    x = torch.randn(32, 1 + 196, 768)
     y = adapter(x, 16)
-    print(x.shape)
+    print(x.shape, y.shape)
     assert (x == y).all()
     print("Test for Adapter passed.")
 
@@ -87,7 +115,7 @@ class ResidualAttentionBlock(nn.Module):
                  d_model: int,
                  n_head: int,
                  adapter_width: int,
-                 adapter_kernel_size: Tuple[int, int, int],
+                #  adapter_kernel_size: Tuple[int, int, int],
                  adapter_pre_attn: bool,
                  adapter_pre_mlp: bool,
                  ) -> None:
@@ -106,7 +134,7 @@ class ResidualAttentionBlock(nn.Module):
             Adapter,
             in_channels=d_model,
             adapter_channels=adapter_width,
-            kernel_size=adapter_kernel_size,
+            # kernel_size=adapter_kernel_size,
         )
         self.adapter_pre_attn = \
             adapter_class() if adapter_pre_attn else None
@@ -147,7 +175,7 @@ class Transformer(nn.Module):
                  heads: int,
                  adapter_width: int,
                  adapter_layers: int,
-                 adapter_kernel_size: Tuple[int, int, int],
+                #  adapter_kernel_size: Tuple[int, int, int],
                  adapter_pre_attn: bool,
                  adapter_pre_mlp: bool,
                  ):
@@ -159,7 +187,7 @@ class Transformer(nn.Module):
                 d_model=width,
                 n_head=heads,
                 adapter_width=adapter_width,
-                adapter_kernel_size=adapter_kernel_size,
+                # adapter_kernel_size=adapter_kernel_size,
                 adapter_pre_attn=adapter_pre_attn and i >= layers - adapter_layers,
                 adapter_pre_mlp=adapter_pre_mlp and i >= layers - adapter_layers,
             )
@@ -182,7 +210,7 @@ class VisionTransformer(nn.Module):
                  num_classes: int,
                  adapter_width: int,
                  adapter_layers: int,
-                 adapter_kernel_size: Tuple[int, int, int],
+                #  adapter_kernel_size: Tuple[int, int, int],
                  adapter_pre_attn: bool,
                  adapter_pre_mlp: bool,
                  ):
@@ -200,22 +228,28 @@ class VisionTransformer(nn.Module):
         )
         self.ln_pre = LayerNorm(width)
 
-        self.transformer = Transformer(width, layers, heads,
-            adapter_width, adapter_layers, adapter_kernel_size,
-            adapter_pre_attn, adapter_pre_mlp)
+        self.transformer = Transformer(
+            width, layers, heads,
+            adapter_width, adapter_layers,
+            # adapter_kernel_size,
+            adapter_pre_attn, adapter_pre_mlp
+        )
 
         self.ln_post = LayerNorm(width)
 
         for n, p in self.named_parameters():
           if 'adapter' not in n:
             p.requires_grad_(False)
-            p.data = p.data.half()
+            # p.data = p.data.half()
+            p.data = p.data.float()
         
         self.dropout = nn.Dropout(0.5)
-        self.fc = nn.Linear(width, num_classes)
-        nn.init.normal_(self.fc.weight, std=0.02)
-        nn.init.constant_(self.fc.bias, 0.)
-
+        if num_classes > 0:
+            self.fc = nn.Linear(width, num_classes)
+            nn.init.normal_(self.fc.weight, std=0.02)
+            nn.init.constant_(self.fc.bias, 0.)
+        else:
+            self.fc = nn.Identity()
 
     def forward(self, x: torch.Tensor):
         B, T = x.size(0), x.size(2)
@@ -252,7 +286,7 @@ def clip_vit_base_patch16_adapter24x384(**kwargs):
         heads=12,
         adapter_width=384,
         adapter_layers=12,
-        adapter_kernel_size=(3, 1, 1),
+        # adapter_kernel_size=(3, 1, 1),
         adapter_pre_attn=True,
         adapter_pre_mlp=True,
         **kwargs,
@@ -272,7 +306,7 @@ def clip_vit_base_patch16_adapter12x384(**kwargs):
         heads=12,
         adapter_width=384,
         adapter_layers=12,
-        adapter_kernel_size=(3, 1, 1),
+        # adapter_kernel_size=(3, 1, 1),
         adapter_pre_attn=False,
         adapter_pre_mlp=True,
         **kwargs,
@@ -282,3 +316,14 @@ def clip_vit_base_patch16_adapter12x384(**kwargs):
     checkpoint = torch.jit.load(CLIP_VIT_B16_PATH, map_location='cpu')
     print(model.load_state_dict(checkpoint.visual.state_dict(), strict=False))
     return model
+
+
+if __name__ == "__main__":
+    backbone = clip_vit_base_patch16_adapter12x384(num_classes=0)
+    su.misc.num_params(backbone)
+    su.misc.num_trainable_params(backbone)
+
+    B, T, C, H, W = 4, 16, 3, 224, 224
+    x = torch.randn(B, C, T, H, W)
+    y = backbone(x)
+    print(x.shape, y.shape)
