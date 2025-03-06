@@ -10,6 +10,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import einops
+import timm
 
 from configs import (
     CLIP_VIT_B16_PATH,
@@ -318,6 +319,46 @@ def clip_vit_base_patch16_cls_adapter12x384(**kwargs):
     return model
 
 
+class CLIP4Clip(nn.Module):
+    """
+    CLIP baseline with mean pooling of frame features.
+    """
+    def __init__(self, model_id="vit_base_patch16_clip_224.openai", num_classes=174):
+        super().__init__()
+        self.model = timm.create_model(model_id, pretrained=True)
+        self.model.head = nn.Identity()
+
+        # Classifier
+        if num_classes > 0:
+            self.fc = nn.Linear(self.model.num_features, num_classes)
+            nn.init.normal_(self.fc.weight, std=0.02)
+            nn.init.constant_(self.fc.bias, 0.)
+        else:
+            self.fc = nn.Identity()
+    
+    def forward(self, x):
+        """
+        Args:
+            x (torch.Tensor): (B, T, C, H, W)
+        Returns:
+            torch.Tensor: (B, num_classes)
+        """
+        B = len(x)
+        x = einops.rearrange(x, "B C T H W -> (B T) C H W")
+        z = self.model(x)
+        z = einops.rearrange(z, "(B T) C -> B T C", B=B)
+        y = self.fc(z.mean(dim=1))
+        return y
+    
+
+def clip4clip_vit_base_patch16_meanpool(num_classes=174):
+    model = CLIP4Clip(
+        num_classes=num_classes,
+        model_id="vit_base_patch16_clip_224.openai",
+    )
+    return model
+
+
 if __name__ == "__main__":
     backbone = clip_vit_base_patch16_cls_adapter12x384(num_classes=0)
     su.misc.num_params(backbone)
@@ -326,4 +367,10 @@ if __name__ == "__main__":
     B, T, C, H, W = 4, 16, 3, 224, 224
     x = torch.randn(B, C, T, H, W)
     y = backbone(x)
+    print(x.shape, y.shape)
+
+    import timm
+    model = CLIP4Clip()
+    su.misc.num_params(model)
+    y = model(x)
     print(x.shape, y.shape)
