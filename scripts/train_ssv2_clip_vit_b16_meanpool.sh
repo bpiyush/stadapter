@@ -17,4 +17,5 @@ torchrun --nproc_per_node $n_gpus main_wandb.py \
     --batch_size $batch_size \
     --epochs 100 \
     --warmup_epochs 2 \
-    --eval_freq 5
+    --eval_freq 5 \
+    --num_workers 4
