@@ -214,6 +214,7 @@ def main():
     all_preds = []
     all_labels = []
     
+    n_correct = 0
     for data, labels in metric_logger.log_every(dataloader_val, 100, header):
       data, labels = data.cuda(), labels.cuda()
       B, V = data.size(0), data.size(1)
@@ -226,6 +227,11 @@ def main():
         scores = scores.view(B, V, -1).mean(dim=1)
         acc1 = (scores.topk(1, dim=1)[1] == labels.view(-1, 1)).sum(dim=-1).float().mean().item() * 100
         acc5 = (scores.topk(5, dim=1)[1] == labels.view(-1, 1)).sum(dim=-1).float().mean().item() * 100
+
+        if acc1 > 0:
+          n_correct += 1
+        #   print(f"Acc@1: {acc1}, Acc@5: {acc5}")
+        #   import ipdb; ipdb.set_trace()
         
         # Collect predictions and labels
         if args.use_wandb and dist.get_rank() == 0:
@@ -235,6 +241,9 @@ def main():
             
       metric_logger.meters['acc1'].update(acc1, n=scores.size(0))
       metric_logger.meters['acc5'].update(acc5, n=scores.size(0))
+      print("Number of correct predictions: ", n_correct)
+    #   import ipdb; ipdb.set_trace()
+    
       
     metric_logger.synchronize_between_processes()
     print('* Acc@1 {top1.global_avg:.3f} Acc@5 {top5.global_avg:.3f}'
